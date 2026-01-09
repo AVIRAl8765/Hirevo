@@ -1,0 +1,173 @@
+import spacy
+import re
+import json
+from openai import OpenAI
+
+# -----------------------------
+# LOAD MODEL
+# -----------------------------
+nlp = spacy.load("en_core_web_sm")
+
+# -----------------------------
+# ENTITY RULER
+# -----------------------------
+ruler = nlp.add_pipe("entity_ruler", before="ner")
+
+patterns = [
+    {
+        "label": "PERSON",
+        "pattern": [
+            {"LOWER": "my"},
+            {"LOWER": "name"},
+            {"LOWER": "is"},
+            {"IS_TITLE": True},
+            {"IS_TITLE": True, "OP": "*"}
+        ]
+    },
+    {
+        "label": "INSTITUTE",
+        "pattern": [
+            {"IS_TITLE": True, "OP": "+"},
+            {"LOWER": {"IN": ["university", "college", "institute", "school"]}}
+        ]
+    },
+    {
+        "label": "DEGREE",
+        "pattern": [{"LOWER": {"IN": ["bca", "btech", "mca", "msc", "mba", "bsc", "ba"]}}]
+    },
+    {
+        "label": "DEGREE",
+        "pattern": [{"LOWER": "bachelor"}, {"LOWER": "of"}, {"IS_ALPHA": True, "OP": "+"}]
+    },
+    {
+        "label": "DEGREE",
+        "pattern": [{"LOWER": "master"}, {"LOWER": "of"}, {"IS_ALPHA": True, "OP": "+"}]
+    }
+]
+
+ruler.add_patterns(patterns)
+
+# -----------------------------
+# INPUT
+# -----------------------------
+text = input("Enter resume paragraph:\n")
+doc = nlp(text)
+text_lower = text.lower()
+
+# -----------------------------
+# REGEX
+# -----------------------------
+emails = re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
+phones = re.findall(r"\b\d{10}\b", text)
+
+# -----------------------------
+# SKILLS
+# -----------------------------
+technical_skills = {
+    "python", "django", "sql", "mysql", "html", "css",
+    "javascript", "ai", "machine learning", "nlp"
+}
+
+soft_skills = {
+    "communication", "management", "leadership",
+    "teamwork", "problem solving", "time management",
+    "critical thinking"
+}
+
+# -----------------------------
+# COMPANIES + SKILL MAP
+# -----------------------------
+Big_companies = {
+    "Big ones": ["google", "amazon", "apple", "microsoft"],
+    "Cloud and SAAS Companies": ["aws", "azure", "gcp"],
+    "indian IT giants": ["tcs", "infosys", "wipro"]
+}
+
+company_skill_map = {
+    "Big ones": {"data structures", "algorithms", "system design"},
+    "Cloud and SAAS Companies": {"aws", "docker", "kubernetes"},
+    "indian IT giants": {"java", "sql", "oops"}
+}
+
+experience_keywords = [
+    "worked as", "experience", "intern", "internship",
+    "job", "role", "position", "company", "worked at", "served as"
+]
+
+# -----------------------------
+# EXTRACTION
+# -----------------------------
+names, institutes, degrees = set(), set(), set()
+skills_found, soft_skills_found = set(), set()
+dream_companies_found, detected_company_categories = set(), set()
+recommended_skills, experience_found = set(), []
+
+for ent in doc.ents:
+    if ent.label_ == "PERSON":
+        names.add(ent.text)
+    elif ent.label_ == "INSTITUTE":
+        institutes.add(ent.text)
+    elif ent.label_ == "DEGREE":
+        degrees.add(ent.text.upper())
+
+for s in technical_skills:
+    if s in text_lower:
+        skills_found.add(s)
+
+for s in soft_skills:
+    if s in text_lower:
+        soft_skills_found.add(s)
+
+for category, companies in Big_companies.items():
+    for company in companies:
+        if company in text_lower:
+            dream_companies_found.add(company.title())
+            detected_company_categories.add(category)
+
+for cat in detected_company_categories:
+    recommended_skills.update(company_skill_map.get(cat, set()) - skills_found)
+
+for sent in doc.sents:
+    if any(k in sent.text.lower() for k in experience_keywords):
+        experience_found.append(sent.text.strip())
+
+# -----------------------------
+# AI CV BUILDER
+# -----------------------------
+cv_data = {
+    "name": next(iter(names), ""),
+    "email": emails[0] if emails else "",
+    "phone": phones[0] if phones else "",
+    "degree": list(degrees),
+    "college": list(institutes),
+    "technical_skills": list(skills_found),
+    "soft_skills": list(soft_skills_found),
+    "experience": experience_found,
+    "dream_companies": list(dream_companies_found),
+    "recommended_skills": list(recommended_skills)
+}
+
+prompt = f"""
+You are a professional resume writer.
+
+Generate a clean, professional, ATS-friendly resume
+using ONLY the data below.
+
+Rules:
+- Clear headings
+- Bullet points
+- No fake information
+
+Candidate Data:
+{json.dumps(cv_data, indent=2)}
+"""
+
+client = OpenAI()
+
+response = client.responses.create(
+    model="gpt-4.1-mini",
+    input=prompt
+)
+
+print("\n===== AI GENERATED CV =====\n")
+print(response.output_text)
